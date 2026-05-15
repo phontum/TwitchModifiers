@@ -1,0 +1,59 @@
+name: build-linux
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "linux-v*"
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            libxdo-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Set up Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Linux Tauri bundles
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: "--bundles deb,appimage"
+          tagName: linux-v__VERSION__
+          releaseName: "Twitch Modifiers Linux v__VERSION__"
+          releaseBody: "Linux build artifacts are attached below."
+          releaseDraft: true
+          prerelease: false
