@@ -19,7 +19,7 @@ const fakeMessages = [
   "chat decides",
 ];
 
-export function ChatLayer() {
+export function ChatLayer({ zIndex }: { zIndex?: number }) {
   const [bubbles, setBubbles] = useState<ChatBubble[]>([]);
 
   useEffect(() => {
@@ -67,7 +67,7 @@ export function ChatLayer() {
   }, []);
 
   return (
-    <div className="modifier-chat-layer">
+    <div className="modifier-chat-layer" style={{ zIndex }}>
       {bubbles.map((bubble) => (
         <div
           className="modifier-chat-message"

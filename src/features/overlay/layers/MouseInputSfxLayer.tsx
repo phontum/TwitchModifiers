@@ -6,7 +6,7 @@ import { playInputSfx } from "../inputSfxAudio";
 type MouseInputKind = "leftDown" | "rightDown" | "middleDown" | "wheelUp" | "wheelDown";
 
 interface MouseInputPayload {
-  kind: MouseInputKind;
+  kind: string;
 }
 
 const cooldowns: Record<MouseInputKind, number> = {
@@ -44,9 +44,11 @@ export function MouseInputSfxLayer({ settings }: { settings: MouseInputSfxSettin
     let unsubscribe: (() => void) | null = null;
     safeListen<MouseInputPayload>("input:mouse", (payload) => {
       if (!active) return;
+      if (!["leftDown", "rightDown", "middleDown", "wheelUp", "wheelDown"].includes(payload.kind)) return;
+      const kind = payload.kind as MouseInputKind;
       const now = performance.now();
-      if (now - lastPlayedRef.current[payload.kind] < cooldowns[payload.kind]) return;
-      lastPlayedRef.current[payload.kind] = now;
+      if (now - lastPlayedRef.current[kind] < cooldowns[kind]) return;
+      lastPlayedRef.current[kind] = now;
 
       const current = settingsRef.current;
       const userSounds = {
@@ -55,11 +57,11 @@ export function MouseInputSfxLayer({ settings }: { settings: MouseInputSfxSettin
         middleDown: current.sounds.middleClick,
         wheelUp: current.sounds.wheelUp,
         wheelDown: current.sounds.wheelDown,
-      }[payload.kind];
+      }[kind];
 
       playInputSfx({
         userSounds,
-        defaultSounds: [...defaultSounds[payload.kind]],
+        defaultSounds: [...defaultSounds[kind]],
         volume: current.volume,
         onWarning: (message) => void safeInvoke("append_log", { level: "warn", message }),
       });

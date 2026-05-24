@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { randomInt } from "../../../shared/random";
 
-export function LagLayer() {
+export function LagLayer({ zIndex }: { zIndex?: number }) {
   const [freezing, setFreezing] = useState(false);
 
   useEffect(() => {
@@ -27,5 +27,5 @@ export function LagLayer() {
     };
   }, []);
 
-  return <div className={`modifier-lag-layer ${freezing ? "is-freezing" : ""}`} />;
+  return <div className={`modifier-lag-layer ${freezing ? "is-freezing" : ""}`} style={{ zIndex }} />;
 }

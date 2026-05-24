@@ -1,4 +1,5 @@
 import type { ActiveModifierInstance, ModifierDefinition } from "../../shared/types";
+import { getVideoSlotCount, hasFreeVideoSlot } from "../overlay/layers/variantPlaybackRegistry";
 
 export const ROLL_DURATION_MS = 5600;
 export const ROLL_ITEM_WIDTH = 200;
@@ -15,6 +16,13 @@ export function getAvailableModifiers(
 ): ModifierDefinition[] {
   return modifiers.filter((modifier) => {
     if (!modifier.enabled) return false;
+    if (modifier.type === "video-corner") {
+      const activeVideoCount = activeModifiers.filter((active) => active.modifierId === modifier.id).length;
+      const maxActive = Math.max(1, modifier.maxActiveVideos ?? 4);
+      if (modifier.maxActiveVideosEnabled && activeVideoCount >= maxActive) return false;
+      if (!modifier.maxActiveVideosEnabled && activeVideoCount >= getVideoSlotCount()) return false;
+      if (activeVideoCount >= (modifier.variants?.length ?? 0) && !hasFreeVideoSlot()) return false;
+    }
     if (modifier.allowRepeatWhileActive) return true;
     return !activeModifiers.some((active) => active.modifierId === modifier.id);
   });

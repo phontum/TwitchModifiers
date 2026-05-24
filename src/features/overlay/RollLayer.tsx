@@ -4,6 +4,7 @@ import { makeId } from "../../shared/random";
 import { safeEmit, safeInvoke, safeListen } from "../runtime/tauri";
 import { useRuntimeStore } from "../runtime/runtimeStore";
 import { buildRoll, formatDuration, getAvailableModifiers, ROLL_DURATION_MS, ROLL_ITEM_WIDTH } from "../runtime/rollEngine";
+import { acquireVideoSlot, pickInactiveVariant, variantKey } from "./layers/variantPlaybackRegistry";
 
 interface ActiveRoll {
   sequence: ModifierDefinition[];
@@ -19,6 +20,7 @@ export function RollLayer() {
   const isRolling = useRuntimeStore((state) => state.isRolling);
   const setRolling = useRuntimeStore((state) => state.setRolling);
   const activateModifier = useRuntimeStore((state) => state.activateModifier);
+  const boostActiveModifier = useRuntimeStore((state) => state.boostActiveModifier);
   const expireModifier = useRuntimeStore((state) => state.expireModifier);
   const appendLog = useRuntimeStore((state) => state.appendLog);
   const [roll, setRoll] = useState<ActiveRoll | null>(null);
@@ -89,19 +91,61 @@ export function RollLayer() {
           setRoll(null);
           rollingRef.current = false;
           setRolling(false);
-          const instance = activateModifier(result.winner, durationMultiplier);
-          activeModifiersRef.current = [...activeModifiersRef.current, instance];
-          appendLog("info", `Activated modifier: ${result.winner.title}${durationMultiplier > 1 ? ` x${durationMultiplier}` : ""}`);
-          void safeEmit("modifier:activate", { instance, modifier: result.winner });
-          timersRef.current.push(
-            window.setTimeout(() => {
-              expireModifier(instance.instanceId);
-              void safeEmit("modifier:expired", instance);
-            }, result.winner.durationSeconds * durationMultiplier * 1000),
-          );
+          const instance = activateWinner(result.winner, durationMultiplier);
+          if (instance) {
+            appendLog("info", `Activated modifier: ${result.winner.title}${durationMultiplier > 1 ? ` x${durationMultiplier}` : ""}`);
+            void safeEmit("modifier:activate", { instance, modifier: result.winner });
+            timersRef.current.push(
+              window.setTimeout(() => {
+                const latest = activeModifiersRef.current.find((item) => item.instanceId === instance.instanceId);
+                if (latest && Date.now() < latest.endsAt) {
+                  timersRef.current.push(
+                    window.setTimeout(() => expireModifier(latest.instanceId), Math.max(0, latest.endsAt - Date.now())),
+                  );
+                  return;
+                }
+                expireModifier(instance.instanceId);
+                void safeEmit("modifier:expired", instance);
+              }, Math.max(0, instance.endsAt - Date.now())),
+            );
+          }
           window.setTimeout(runNextRoll, 250);
         }, ROLL_DURATION_MS + 2700),
       );
+    }
+
+    function activateWinner(modifier: ModifierDefinition, durationMultiplier: number) {
+      if (modifier.type !== "video-corner") {
+        const instance = activateModifier(modifier, durationMultiplier);
+        activeModifiersRef.current = [...activeModifiersRef.current, instance];
+        return instance;
+      }
+
+      const variant = pickInactiveVariant(modifier);
+      if (!variant?.videoId) {
+        const active = activeModifiersRef.current.filter((instance) => instance.modifierId === modifier.id && instance.variantKey);
+        if (active.length === 0) return undefined;
+        const target = active[Math.floor(Math.random() * active.length)];
+        const boosted = boostActiveModifier(target.instanceId, modifier, durationMultiplier);
+        if (boosted) {
+          activeModifiersRef.current = activeModifiersRef.current.map((instance) => (instance.instanceId === boosted.instanceId ? boosted : instance));
+        }
+        return boosted;
+      }
+
+      const slot = acquireVideoSlot();
+      const instance = {
+        ...activateModifier(modifier, durationMultiplier),
+        variantKey: variantKey(variant),
+        variantVideoId: variant.videoId,
+        videoSlotIndex: slot.slotIndex,
+        repeatCount: 1,
+      };
+      activeModifiersRef.current = [...activeModifiersRef.current.filter((item) => item.instanceId !== instance.instanceId), instance];
+      useRuntimeStore.setState((state) => ({
+        activeModifiers: state.activeModifiers.map((item) => (item.instanceId === instance.instanceId ? instance : item)),
+      }));
+      return instance;
     }
 
     function enqueueTrigger(trigger: TriggerEvent) {
@@ -150,7 +194,7 @@ export function RollLayer() {
       queueRef.current = [];
       unsubs.forEach((unsub) => unsub());
     };
-  }, [activateModifier, appendLog, expireModifier, setRolling]);
+  }, [activateModifier, appendLog, boostActiveModifier, expireModifier, setRolling]);
 
   const style = useMemo(
     () => ({

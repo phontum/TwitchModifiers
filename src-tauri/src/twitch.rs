@@ -2,7 +2,7 @@ use crate::config_store::{self, AppConfig};
 use crate::runtime::{emit_roll_requested, make_log, ChatMessageEvent, RuntimeState, TriggerEvent};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -216,6 +216,7 @@ pub async fn disconnect(app: AppHandle) -> Result<(), String> {
         config.twitch.enabled = false;
         config.twitch.access_token = None;
         config.twitch.refresh_token = None;
+        config.twitch.broadcaster_id = None;
         config.twitch.broadcaster_login = None;
 
         config_store::save(&app, &config)?;
@@ -226,6 +227,35 @@ pub async fn disconnect(app: AppHandle) -> Result<(), String> {
 
     app.emit("log:append", make_log("info", "Twitch disconnected"))
         .map_err(|error| error.to_string())
+}
+
+async fn disable_twitch_after_auth_error(app: &AppHandle, reason: &str) -> Result<(), String> {
+    if let Some(mut config) = config_store::load(app)? {
+        config.twitch.enabled = false;
+        config.twitch.access_token = None;
+        config.twitch.refresh_token = None;
+
+        config_store::save(app, &config)?;
+
+        app.emit("app:config-loaded", config)
+            .map_err(|error| error.to_string())?;
+    }
+
+    app.emit(
+        "log:append",
+        make_log(
+            "error",
+            format!("Twitch authorization expired or was revoked: {reason}. Reconnect Twitch."),
+        ),
+    )
+    .map_err(|error| error.to_string())
+}
+
+fn is_twitch_auth_error(error: &str) -> bool {
+    error.contains("Twitch OAuth token invalid")
+        || error.contains("Login authentication failed")
+        || error.contains("Invalid OAuth token")
+        || error.contains("401 Unauthorized")
 }
 
 pub async fn start_listener(app: AppHandle, config: AppConfig) -> Result<(), String> {
@@ -260,6 +290,16 @@ pub async fn start_listener(app: AppHandle, config: AppConfig) -> Result<(), Str
 
             return Ok(());
         }
+    }
+
+    if !config.twitch.reward_rolls_enabled && !config.twitch.subscription_rolls_enabled {
+        app.emit(
+            "log:append",
+            make_log("info", "Twitch EventSub skipped: reward and subscription rolls disabled"),
+        )
+        .map_err(|error| error.to_string())?;
+
+        return Ok(());
     }
 
     if let Some(old_handle) = task_guard.take() {
@@ -362,6 +402,11 @@ async fn run_chat_with_reconnect(
                 .map_err(|error| error.to_string())?;
             }
             Err(error) => {
+                if is_twitch_auth_error(&error) {
+                    disable_twitch_after_auth_error(&app, &error).await?;
+                    return Err(error);
+                }
+
                 app.emit(
                     "log:append",
                     make_log(
@@ -432,12 +477,14 @@ async fn run_chat_once(app: AppHandle, token: String, login: String) -> Result<(
                     }
 
                     if line.contains(" NOTICE ") {
+                        let notice = irc_trailing(line);
+                        if is_twitch_auth_error(&notice) {
+                            return Err(notice);
+                        }
+
                         app.emit(
                             "log:append",
-                            make_log(
-                                "warn",
-                                format!("Twitch chat notice: {}", irc_trailing(line)),
-                            ),
+                            make_log("warn", format!("Twitch chat notice: {notice}")),
                         )
                         .map_err(|error| error.to_string())?;
                         continue;
@@ -533,6 +580,11 @@ async fn run_eventsub_with_reconnect(app: AppHandle, config: AppConfig) -> Resul
                 .map_err(|error| error.to_string())?;
             }
             Err(error) => {
+                if is_twitch_auth_error(&error) {
+                    disable_twitch_after_auth_error(&app, &error).await?;
+                    return Err(error);
+                }
+
                 app.emit(
                     "log:append",
                     make_log(
@@ -621,62 +673,64 @@ async fn run_eventsub_once(app: AppHandle, config: AppConfig) -> Result<(), Stri
                                 format!("Twitch session_welcome missing session id: {payload}")
                             })?;
 
-                        let custom_subscription_response = subscribe_redemptions(
-                            &client_id,
-                            &token,
-                            &broadcaster_id,
-                            configured_reward_id.as_str(),
-                            session_id,
-                        )
-                        .await?;
+                        if config.twitch.reward_rolls_enabled {
+                            let custom_subscription_response = subscribe_redemptions(
+                                &client_id,
+                                &token,
+                                &broadcaster_id,
+                                configured_reward_id.as_str(),
+                                session_id,
+                            )
+                            .await?;
 
-                        app.emit(
-                            "log:append",
-                            make_log(
-                                "info",
-                                format!(
-                                    "Twitch custom reward subscription created: {}",
-                                    summarize_subscription_response(
-                                        &custom_subscription_response,
-                                        "custom"
-                                    )
+                            app.emit(
+                                "log:append",
+                                make_log(
+                                    "info",
+                                    format!(
+                                        "Twitch custom reward subscription created: {}",
+                                        summarize_subscription_response(
+                                            &custom_subscription_response,
+                                            "custom"
+                                        )
+                                    ),
                                 ),
-                            ),
-                        )
-                        .map_err(|error| error.to_string())?;
+                            )
+                            .map_err(|error| error.to_string())?;
 
-                        match subscribe_automatic_redemptions(
-                            &client_id,
-                            &token,
-                            &broadcaster_id,
-                            session_id,
-                        )
-                        .await
-                        {
-                            Ok(response) => {
-                                app.emit(
-                                    "log:append",
-                                    make_log(
-                                        "info",
-                                        format!(
-                                            "Twitch automatic reward subscription created: {}",
-                                            summarize_subscription_response(&response, "automatic")
+                            match subscribe_automatic_redemptions(
+                                &client_id,
+                                &token,
+                                &broadcaster_id,
+                                session_id,
+                            )
+                            .await
+                            {
+                                Ok(response) => {
+                                    app.emit(
+                                        "log:append",
+                                        make_log(
+                                            "info",
+                                            format!(
+                                                "Twitch automatic reward subscription created: {}",
+                                                summarize_subscription_response(&response, "automatic")
+                                            ),
                                         ),
-                                    ),
-                                )
-                                .map_err(|error| error.to_string())?;
-                            }
-                            Err(error) => {
-                                app.emit(
-                                    "log:append",
-                                    make_log(
-                                        "warn",
-                                        format!(
-                                            "Twitch automatic reward subscription skipped: {error}"
+                                    )
+                                    .map_err(|error| error.to_string())?;
+                                }
+                                Err(error) => {
+                                    app.emit(
+                                        "log:append",
+                                        make_log(
+                                            "warn",
+                                            format!(
+                                                "Twitch automatic reward subscription skipped: {error}"
+                                            ),
                                         ),
-                                    ),
-                                )
-                                .map_err(|emit_error| emit_error.to_string())?;
+                                    )
+                                    .map_err(|emit_error| emit_error.to_string())?;
+                                }
                             }
                         }
 
@@ -946,6 +1000,12 @@ async fn create_eventsub_subscription(
     })?;
 
     if !status.is_success() {
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(format!(
+                "Twitch OAuth token invalid for {subscription_type}: {status}: {response_body}; request={body}"
+            ));
+        }
+
         return Err(format!(
             "Twitch subscription response failed for {subscription_type}: {status}: {response_body}; request={body}"
         ));
@@ -986,6 +1046,10 @@ fn handle_redemption_event(
     subscription_type: &str,
     event: Value,
 ) -> Result<(), String> {
+    if !config.twitch.reward_rolls_enabled {
+        return Ok(());
+    }
+
     let event_id = event
         .get("id")
         .and_then(Value::as_str)

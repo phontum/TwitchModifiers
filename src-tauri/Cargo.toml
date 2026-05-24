@@ -32,3 +32,4 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"
 url = "2"
 urlencoding = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }

@@ -1,4 +1,4 @@
-import type { AppConfig, KeyboardInputSfxSettings, ModifierDefinition, MouseInputSfxSettings } from "./types";
+import type { AppConfig, KeyboardInputSfxSettings, ModifierDefinition, MouseInputSfxSettings, VisualLayerType } from "./types";
 
 const defaultMouseInputSfx: MouseInputSfxSettings = {
   volume: 45,
@@ -15,6 +15,14 @@ const defaultKeyboardInputSfx: KeyboardInputSfxSettings = {
   volume: 38,
   sounds: [],
 };
+
+export const defaultVisualLayerOrder: VisualLayerType[] = ["lag", "tunnel", "flashlight", "chat", "killer-cursor", "big-cursor", "sleeping-business", "video-corner"];
+
+function normalizeVisualLayerOrder(order: VisualLayerType[] | undefined): VisualLayerType[] {
+  const known = new Set(defaultVisualLayerOrder);
+  const incoming = (order || []).filter((item): item is VisualLayerType => known.has(item as VisualLayerType));
+  return [...incoming, ...defaultVisualLayerOrder.filter((item) => !incoming.includes(item))];
+}
 
 export const defaultModifiers: ModifierDefinition[] = [
   {
@@ -84,6 +92,8 @@ export const defaultModifiers: ModifierDefinition[] = [
     enabled: true,
     allowRepeatWhileActive: true,
     volume: 15,
+    maxActiveVideosEnabled: false,
+    maxActiveVideos: 4,
     description: "Маленькое видео в углу экрана.",
     variants: [
       { videoId: "vTfD20dbxho", videoUrl: "https://youtu.be/vTfD20dbxho" },
@@ -104,6 +114,42 @@ export const defaultModifiers: ModifierDefinition[] = [
     description: "Глобальные звуки кликов и скролла мыши.",
   },
   {
+    id: "big-cursor",
+    title: "\u042d\u0442\u043e\u0442 \u043f\u0440\u0438\u0446\u0435\u043b \u043f\u0440\u043e\u0441\u0442\u043e \u0438\u043c\u0431\u0430",
+    rarity: "rare",
+    rollWeight: 8,
+    color: "#84cc16",
+    durationSeconds: 3 * 60,
+    type: "big-cursor",
+    enabled: true,
+    allowRepeatWhileActive: false,
+    description: "\u0411\u043e\u043b\u044c\u0448\u043e\u0439 \u0441\u0430\u043b\u0430\u0442\u043e\u0432\u044b\u0439 \u043a\u0432\u0430\u0434\u0440\u0430\u0442 \u043d\u0430 \u043a\u0443\u0440\u0441\u043e\u0440\u0435.",
+  },
+  {
+    id: "killer-cursor",
+    title: "\u041a\u0438\u043b\u043b\u0435\u0440",
+    rarity: "epic",
+    rollWeight: 5,
+    color: "#ef4444",
+    durationSeconds: 2 * 60,
+    type: "killer-cursor",
+    enabled: true,
+    allowRepeatWhileActive: false,
+    description: "\u0421\u043d\u0430\u0439\u043f\u0435\u0440\u0441\u043a\u0438\u0439 \u043f\u0440\u0438\u0446\u0435\u043b \u043f\u0440\u0435\u0441\u043b\u0435\u0434\u0443\u0435\u0442 \u043a\u0443\u0440\u0441\u043e\u0440. \u0414\u043e\u0433\u043e\u043d\u0438\u0442 - \u044d\u043a\u0440\u0430\u043d \u0433\u0430\u0441\u043d\u0435\u0442.",
+  },
+  {
+    id: "flashlight",
+    title: "\u0424\u043e\u043d\u0430\u0440\u0438\u043a",
+    rarity: "epic",
+    rollWeight: 7,
+    color: "#facc15",
+    durationSeconds: 4 * 60,
+    type: "flashlight",
+    enabled: true,
+    allowRepeatWhileActive: false,
+    description: "\u042d\u043a\u0440\u0430\u043d \u0442\u0435\u043c\u043d\u0435\u0435\u0442, \u0430 \u043d\u0435\u0431\u043e\u043b\u044c\u0448\u0430\u044f \u043e\u0431\u043b\u0430\u0441\u0442\u044c \u043f\u043e\u0434 \u043a\u0443\u0440\u0441\u043e\u0440\u043e\u043c \u043e\u0441\u0432\u0435\u0449\u0430\u0435\u0442\u0441\u044f.",
+  },
+  {
     id: "keyboard-input-sfx",
     title: "ASMR клавиши",
     rarity: "uncommon",
@@ -114,6 +160,19 @@ export const defaultModifiers: ModifierDefinition[] = [
     enabled: true,
     allowRepeatWhileActive: false,
     description: "Глобальные звуки нажатий клавиш.",
+  },
+  {
+    id: "sleeping-business",
+    title: "Спящий бизнес",
+    rarity: "rare",
+    rollWeight: 8,
+    color: "#06b6d4",
+    durationSeconds: 6 * 60,
+    type: "sleeping-business",
+    enabled: true,
+    allowRepeatWhileActive: false,
+    volume: 34,
+    description: "Справа снизу появляются будильники и иногда звучат сигналы мессенджеров.",
   },
 ];
 
@@ -126,6 +185,7 @@ export const defaultConfig: AppConfig = {
     broadcasterId: null,
     broadcasterLogin: null,
     rewardId: "",
+    rewardRollsEnabled: true,
     subscriptionRollsEnabled: true,
     subscriptionMinTier: "2000",
     giftMinCount: 5,
@@ -148,6 +208,7 @@ export const defaultConfig: AppConfig = {
     monitorIndex: 0,
     alwaysOnTop: true,
     clickThrough: true,
+    visualLayerOrder: defaultVisualLayerOrder,
   },
   theme: "dark",
   mouseInputSfx: defaultMouseInputSfx,
@@ -169,6 +230,8 @@ function normalizeModifier(modifier: ModifierDefinition): ModifierDefinition {
   return {
     ...(defaultModifier || modifier),
     ...modifier,
+    maxActiveVideosEnabled: modifier.maxActiveVideosEnabled ?? defaultModifier?.maxActiveVideosEnabled ?? false,
+    maxActiveVideos: Math.max(1, Math.min(24, modifier.maxActiveVideos ?? defaultModifier?.maxActiveVideos ?? 4)),
     variants: modifier.variants || legacyVariant || defaultModifier?.variants || [],
   };
 }
@@ -185,7 +248,11 @@ export function normalizeConfig(config: Partial<AppConfig> | null | undefined): 
     ...config,
     twitch: { ...defaultConfig.twitch, ...config?.twitch },
     donationAlerts: { ...defaultConfig.donationAlerts, ...config?.donationAlerts },
-    overlay: { ...defaultConfig.overlay, ...config?.overlay },
+    overlay: {
+      ...defaultConfig.overlay,
+      ...config?.overlay,
+      visualLayerOrder: normalizeVisualLayerOrder(config?.overlay?.visualLayerOrder),
+    },
     theme: config?.theme === "light" ? "light" : config?.theme === "dark" ? "dark" : defaultConfig.theme,
     mouseInputSfx: {
       ...defaultMouseInputSfx,

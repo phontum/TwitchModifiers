@@ -5,7 +5,13 @@ export type ModifierType =
   | "lag"
   | "video-corner"
   | "mouse-input-sfx"
-  | "keyboard-input-sfx";
+  | "keyboard-input-sfx"
+  | "big-cursor"
+  | "killer-cursor"
+  | "flashlight"
+  | "sleeping-business";
+
+export type VisualLayerType = "lag" | "tunnel" | "chat" | "video-corner" | "big-cursor" | "killer-cursor" | "flashlight" | "sleeping-business";
 
 export interface MouseInputSfxSettings {
   volume: number;
@@ -35,6 +41,8 @@ export interface ModifierDefinition {
   durationSeconds: number;
   allowRepeatWhileActive: boolean;
   volume?: number;
+  maxActiveVideosEnabled?: boolean;
+  maxActiveVideos?: number;
   variants?: Array<{
     videoId?: string;
     videoUrl?: string;
@@ -61,6 +69,13 @@ export interface ActiveModifierInstance {
   modifierId: string;
   startedAt: number;
   endsAt: number;
+  state?: "killer-chasing" | "killer-killed";
+  titleOverride?: string;
+  descriptionOverride?: string;
+  variantKey?: string;
+  variantVideoId?: string;
+  videoSlotIndex?: number;
+  repeatCount?: number;
 }
 
 export interface AppRuntimeState {
@@ -95,6 +110,7 @@ export interface AppConfig {
     broadcasterLogin: string | null;
     rewardId: string;
     rewardTitle: string;
+    rewardRollsEnabled: boolean;
     subscriptionRollsEnabled: boolean;
     subscriptionMinTier: "1000" | "2000" | "3000";
     giftMinCount: number;
@@ -116,6 +132,7 @@ export interface AppConfig {
     monitorIndex: number;
     alwaysOnTop: boolean;
     clickThrough: boolean;
+    visualLayerOrder: VisualLayerType[];
   };
   theme: "light" | "dark";
   mouseInputSfx: MouseInputSfxSettings;

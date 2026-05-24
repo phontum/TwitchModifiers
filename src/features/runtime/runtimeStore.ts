@@ -14,6 +14,8 @@ interface RuntimeStore {
   setRolling: (isRolling: boolean) => void;
   appendLog: (level: AppLog["level"], message: string) => void;
   activateModifier: (modifier: ModifierDefinition, durationMultiplier?: number) => ActiveModifierInstance;
+  boostActiveModifier: (instanceId: string, modifier: ModifierDefinition, durationMultiplier?: number) => ActiveModifierInstance | undefined;
+  markKillerKilled: (instanceId: string) => ActiveModifierInstance | undefined;
   expireModifier: (instanceId: string) => void;
   stopAllModifiers: () => void;
 }
@@ -45,6 +47,36 @@ export const useRuntimeStore = create<RuntimeStore>((set, get) => ({
     };
     set({ activeModifiers: [...get().activeModifiers, instance] });
     return instance;
+  },
+  boostActiveModifier: (instanceId, modifier, durationMultiplier = 1) => {
+    const current = get().activeModifiers.find((instance) => instance.instanceId === instanceId);
+    if (!current) return undefined;
+    const multiplier = Math.max(1, Math.min(6, Math.floor(durationMultiplier)));
+    const repeatCount = Math.min(6, (current.repeatCount ?? 1) + 1);
+    const maxEndsAt = current.startedAt + modifier.durationSeconds * 6 * 1000;
+    const endsAt = Math.min(maxEndsAt, current.endsAt + modifier.durationSeconds * multiplier * 1000);
+    const boosted = { ...current, repeatCount, endsAt };
+    set((state) => ({
+      activeModifiers: state.activeModifiers.map((instance) => (instance.instanceId === instanceId ? boosted : instance)),
+    }));
+    return boosted;
+  },
+  markKillerKilled: (instanceId) => {
+    const current = get().activeModifiers.find((instance) => instance.instanceId === instanceId);
+    if (!current) return undefined;
+    const now = Date.now();
+    const killed = {
+      ...current,
+      startedAt: now,
+      endsAt: now + 30000,
+      state: "killer-killed" as const,
+      titleOverride: "Киллер",
+      descriptionOverride: "Вы были устранены киллером.",
+    };
+    set((state) => ({
+      activeModifiers: state.activeModifiers.map((instance) => (instance.instanceId === instanceId ? killed : instance)),
+    }));
+    return killed;
   },
   expireModifier: (instanceId) =>
     set((state) => ({

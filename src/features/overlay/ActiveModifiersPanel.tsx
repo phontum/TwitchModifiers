@@ -25,8 +25,8 @@ export function ActiveModifiersPanel() {
         if (!modifier) return null;
         return (
           <section className="modifier-active" style={{ "--modifier-color": modifier.color } as React.CSSProperties} key={instance.instanceId}>
-            <strong>{modifier.title}</strong>
-            <span>{modifier.description}</span>
+            <strong>{instance.titleOverride || modifier.title}</strong>
+            <span>{instance.descriptionOverride || modifier.description}</span>
             <b>{formatClock(instance.endsAt - now)}</b>
           </section>
         );

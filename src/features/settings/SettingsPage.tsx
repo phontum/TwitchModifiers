@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
-import { Moon, Pause, Play, PlugZap, Plus, Save, ShieldAlert, Sun, TestTube2, Trash2, Volume2 } from "lucide-react";
-import type { AppConfig, AppLog, DisplayMonitor, KeyboardInputSfxSettings, ModifierDefinition, MouseInputSfxSettings } from "../../shared/types";
+import { useEffect, useRef, useState } from "react";
+import { GripVertical, Moon, Pause, Play, PlugZap, Plus, Save, ShieldAlert, Sun, TestTube2, Trash2, Volume2 } from "lucide-react";
+import type { AppConfig, AppLog, DisplayMonitor, KeyboardInputSfxSettings, ModifierDefinition, MouseInputSfxSettings, VisualLayerType } from "../../shared/types";
 import { defaultConfig, normalizeConfig } from "../../shared/defaultModifiers";
 import { makeId } from "../../shared/random";
 import { isTauri, safeEmit, safeInvoke, safeListen } from "../runtime/tauri";
@@ -39,9 +39,50 @@ function fileLabel(path: string): string {
   return path.split(/[\\/]/).pop() || path;
 }
 
+function roundProbability(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function getModifierProbability(modifier: ModifierDefinition): number {
+  return Math.max(0, modifier.rollWeight ?? 0);
+}
+
+function normalizeActiveModifierProbabilities(modifiers: ModifierDefinition[]): ModifierDefinition[] {
+  const enabledModifiers = modifiers.filter((modifier) => modifier.enabled);
+  if (enabledModifiers.length === 0) return modifiers;
+
+  const total = enabledModifiers.reduce((sum, modifier) => sum + getModifierProbability(modifier), 0);
+  const equalWeight = roundProbability(100 / enabledModifiers.length);
+  let assigned = 0;
+
+  return modifiers.map((modifier) => {
+    if (!modifier.enabled) return modifier;
+    const enabledIndex = enabledModifiers.findIndex((item) => item.id === modifier.id);
+    const isLast = enabledIndex === enabledModifiers.length - 1;
+    const nextWeight = isLast
+      ? roundProbability(100 - assigned)
+      : roundProbability(total > 0 ? (getModifierProbability(modifier) / total) * 100 : equalWeight);
+    assigned = roundProbability(assigned + nextWeight);
+    return { ...modifier, rollWeight: Math.max(0, nextWeight) };
+  });
+}
+
+const visualLayerLabels: Record<VisualLayerType, string> = {
+  lag: "\u041b\u0430\u0433\u0438",
+  tunnel: "\u0417\u0430\u0448\u043e\u0440\u0435\u043d\u043d\u044b\u0439",
+  chat: "\u0427\u0430\u0442",
+  "video-corner": "\u0421\u0414\u0412\u0413",
+  "big-cursor": "\u042d\u0442\u043e\u0442 \u043f\u0440\u0438\u0446\u0435\u043b \u043f\u0440\u043e\u0441\u0442\u043e \u0438\u043c\u0431\u0430",
+  "killer-cursor": "\u041a\u0438\u043b\u043b\u0435\u0440",
+  flashlight: "\u0424\u043e\u043d\u0430\u0440\u0438\u043a",
+  "sleeping-business": "\u0421\u043f\u044f\u0449\u0438\u0439 \u0431\u0438\u0437\u043d\u0435\u0441",
+};
+
 export function SettingsPage() {
   const [config, setConfig] = useState<AppConfig>(defaultConfig);
   const [monitors, setMonitors] = useState<DisplayMonitor[]>([]);
+  const [probabilityWarning, setProbabilityWarning] = useState(false);
+  const probabilityWarningTimerRef = useRef<number | null>(null);
   const isPlaying = useRuntimeStore((state) => state.isPlaying);
   const setPlaying = useRuntimeStore((state) => state.setPlaying);
   const logs = useRuntimeStore((state) => state.logs);
@@ -50,8 +91,12 @@ export function SettingsPage() {
   useEffect(() => {
     safeInvoke<AppConfig>("load_config").then((loaded) => {
       const nextConfig = normalizeConfig(loaded || defaultConfig);
-      setConfig(normalizeConfig(nextConfig));
-      void safeEmit("app:config-loaded", nextConfig);
+      const nextConfigWithProbabilities = {
+        ...nextConfig,
+        modifiers: normalizeActiveModifierProbabilities(nextConfig.modifiers),
+      };
+      setConfig(nextConfigWithProbabilities);
+      void safeEmit("app:config-loaded", nextConfigWithProbabilities);
     });
     safeInvoke<DisplayMonitor[]>("list_monitors").then((loadedMonitors) => {
       if (loadedMonitors?.length) setMonitors(loadedMonitors);
@@ -59,7 +104,8 @@ export function SettingsPage() {
 
     const unsubs: Array<() => void> = [];
     safeListen<AppConfig>("app:config-loaded", (nextConfig) => {
-      setConfig(nextConfig);
+      const normalized = normalizeConfig(nextConfig);
+      setConfig({ ...normalized, modifiers: normalizeActiveModifierProbabilities(normalized.modifiers) });
     }).then((unsub) => unsubs.push(unsub));
     safeListen<AppLog>("log:append", (log) => appendLog(log.level, log.message)).then((unsub) => unsubs.push(unsub));
     safeListen("runtime:started", () => setPlaying(true)).then((unsub) => unsubs.push(unsub));
@@ -71,8 +117,17 @@ export function SettingsPage() {
     document.documentElement.dataset.theme = config.theme;
   }, [config.theme]);
 
+  useEffect(() => {
+    return () => {
+      if (probabilityWarningTimerRef.current) window.clearTimeout(probabilityWarningTimerRef.current);
+    };
+  }, []);
+
   async function saveConfig(nextConfig = config) {
-    const normalized = normalizeConfig(nextConfig);
+    const normalized = normalizeConfig({
+      ...nextConfig,
+      modifiers: normalizeActiveModifierProbabilities(nextConfig.modifiers),
+    });
     setConfig(normalized);
     await safeInvoke("save_config", { config: normalized });
     await safeEmit("app:config-loaded", normalized);
@@ -84,6 +139,43 @@ export function SettingsPage() {
       ...config,
       modifiers: config.modifiers.map((modifier) => (modifier.id === modifierId ? { ...modifier, ...patch } : modifier)),
     });
+  }
+
+  function updateModifierEnabled(modifierId: string, enabled: boolean) {
+    const nextModifiers = config.modifiers.map((modifier) => (modifier.id === modifierId ? { ...modifier, enabled } : modifier));
+    setConfig({ ...config, modifiers: normalizeActiveModifierProbabilities(nextModifiers) });
+  }
+
+  function showProbabilityWarning() {
+    setProbabilityWarning(true);
+    if (probabilityWarningTimerRef.current) window.clearTimeout(probabilityWarningTimerRef.current);
+    probabilityWarningTimerRef.current = window.setTimeout(() => setProbabilityWarning(false), 2200);
+  }
+
+  function updateModifierProbability(modifierId: string, value: number) {
+    if (!Number.isFinite(value) || value < 0 || value > 100) showProbabilityWarning();
+    const targetValue = roundProbability(Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0)));
+    const enabledModifiers = config.modifiers.filter((modifier) => modifier.enabled);
+    const otherEnabled = enabledModifiers.filter((modifier) => modifier.id !== modifierId);
+    const remaining = roundProbability(100 - targetValue);
+    const otherTotal = otherEnabled.reduce((sum, modifier) => sum + getModifierProbability(modifier), 0);
+    const equalOtherWeight = otherEnabled.length > 0 ? roundProbability(remaining / otherEnabled.length) : 0;
+    let assigned = 0;
+
+    const nextModifiers = config.modifiers.map((modifier) => {
+      if (!modifier.enabled) return modifier;
+      if (modifier.id === modifierId) return { ...modifier, rollWeight: targetValue };
+      if (otherEnabled.length === 0) return modifier;
+
+      const isLastOther = otherEnabled[otherEnabled.length - 1].id === modifier.id;
+      const nextWeight = isLastOther
+        ? roundProbability(remaining - assigned)
+        : roundProbability(otherTotal > 0 ? (getModifierProbability(modifier) / otherTotal) * remaining : equalOtherWeight);
+      assigned = roundProbability(assigned + nextWeight);
+      return { ...modifier, rollWeight: Math.max(0, nextWeight) };
+    });
+
+    setConfig({ ...config, modifiers: nextModifiers });
   }
 
   async function connectTwitch() {
@@ -198,6 +290,12 @@ export function SettingsPage() {
     });
   }
 
+  const enabledModifiers = config.modifiers.filter((modifier) => modifier.enabled);
+  const probabilityTotal = roundProbability(enabledModifiers.reduce((sum, modifier) => sum + getModifierProbability(modifier), 0));
+  const probabilityTotalInvalid = Math.abs(probabilityTotal - 100) > 0.1;
+  const twitchConnected = config.twitch.enabled && Boolean(config.twitch.accessToken);
+  const twitchNeedsReconnect = !twitchConnected && Boolean(config.twitch.broadcasterId);
+
   return (
     <main className="settings-root">
       <header className="settings-header">
@@ -206,11 +304,21 @@ export function SettingsPage() {
           <p>Для игр используйте Borderless Windowed / Windowed Fullscreen. В exclusive fullscreen overlay может быть не виден.</p>
         </div>
         <div className="status-grid">
-          <IntegrationStatus label="Twitch" connected={config.twitch.enabled && Boolean(config.twitch.accessToken)} />
+          <IntegrationStatus label="Twitch" connected={twitchConnected} />
           <IntegrationStatus label="DonationAlerts" connected={config.donationAlerts.enabled && Boolean(config.donationAlerts.accessToken)} />
           <IntegrationStatus label="Runtime" connected={isPlaying} />
         </div>
       </header>
+
+      {twitchNeedsReconnect && (
+        <section className="auth-alert">
+          <div>
+            <strong>Twitch disconnected</strong>
+            <p>The Twitch OAuth token is no longer valid. Reconnect Twitch to restore chat and EventSub rewards.</p>
+          </div>
+          <button className="primary" onClick={connectTwitch}><PlugZap size={16} />Reconnect Twitch</button>
+        </section>
+      )}
 
       <section className="toolbar">
         <button
@@ -251,6 +359,19 @@ export function SettingsPage() {
               value={config.twitch.rewardTitle}
               onChange={(event) => setConfig({ ...config, twitch: { ...config.twitch, rewardTitle: event.target.value } })}
             />
+          </label>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={config.twitch.rewardRollsEnabled}
+              onChange={(event) =>
+                setConfig({
+                  ...config,
+                  twitch: { ...config.twitch, rewardRollsEnabled: event.target.checked },
+                })
+              }
+            />
+            Listen for Twitch reward redemptions
           </label>
           <label className="checkbox-row">
             <input
@@ -395,11 +516,68 @@ export function SettingsPage() {
               ))}
             </select>
           </label>
+          <div className="layer-order">
+            <strong>Visual layer order</strong>
+            <div className="layer-order__list">
+              {config.overlay.visualLayerOrder.map((layerType, index) => (
+                <div
+                  className="layer-order__item"
+                  draggable
+                  key={layerType}
+                  onDragStart={(event) => event.dataTransfer.setData("text/plain", layerType)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const dragged = event.dataTransfer.getData("text/plain") as VisualLayerType;
+                    const currentOrder = config.overlay.visualLayerOrder;
+                    if (!dragged || dragged === layerType || !currentOrder.includes(dragged)) return;
+                    const withoutDragged = currentOrder.filter((item) => item !== dragged);
+                    const dropIndex = withoutDragged.indexOf(layerType);
+                    const nextOrder = [...withoutDragged.slice(0, dropIndex), dragged, ...withoutDragged.slice(dropIndex)];
+                    setConfig({ ...config, overlay: { ...config.overlay, visualLayerOrder: nextOrder } });
+                  }}
+                >
+                  <GripVertical size={15} />
+                  <span>{index + 1}</span>
+                  <b>{visualLayerLabels[layerType]}</b>
+                </div>
+              ))}
+            </div>
+          </div>
           <button onClick={() => saveConfig()}><Save size={16} />Save Overlay</button>
         </section>
 
         <section className="panel">
           <h2>MVP modifiers</h2>
+          <div className="probability-editor">
+            <div className="probability-editor__header">
+              <strong>Roll probability</strong>
+              <span className={probabilityTotalInvalid || probabilityWarning ? "probability-total is-invalid" : "probability-total"}>
+                {probabilityTotal.toFixed(1)}%
+              </span>
+              {probabilityWarning && (
+                <span className="probability-warning">
+                  {"\u0441\u0443\u043c\u043c\u0430 \u043d\u0435 \u043c\u043e\u0436\u0435\u0442 \u0431\u044b\u0442\u044c \u0431\u043e\u043b\u044c\u0448\u0435 100%"}
+                </span>
+              )}
+            </div>
+            <div className="probability-editor__list">
+              {enabledModifiers.map((modifier) => (
+                <label className="probability-row" key={modifier.id}>
+                  <span style={{ borderColor: modifier.color }}>{modifier.title}</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.1"
+                    value={getModifierProbability(modifier)}
+                    onChange={(event) => updateModifierProbability(modifier.id, Number(event.target.value))}
+                  />
+                  <b>%</b>
+                </label>
+              ))}
+            </div>
+          </div>
           <div className="modifier-list">
             {config.modifiers.map((modifier) => (
               <div className="modifier-card" key={modifier.id}>
@@ -407,7 +585,7 @@ export function SettingsPage() {
                   <input
                     type="checkbox"
                     checked={modifier.enabled}
-                    onChange={(event) => updateModifier(modifier.id, { enabled: event.target.checked })}
+                    onChange={(event) => updateModifierEnabled(modifier.id, event.target.checked)}
                   />
                   <span style={{ borderColor: modifier.color }}>
                     <b>{modifier.title}</b>
@@ -419,9 +597,10 @@ export function SettingsPage() {
                     modifier={modifier}
                     onChange={(variants) => updateModifier(modifier.id, { variants })}
                     onVolumeChange={(volume) => updateModifier(modifier.id, { volume })}
+                    onVideoLimitChange={(patch) => updateModifier(modifier.id, patch)}
                   />
                 )}
-                {modifier.type === "lag" && (
+                {["flashlight", "lag", "tunnel"].includes(modifier.type) && (
                   <DurationEditor
                     seconds={modifier.durationSeconds}
                     onChange={(durationSeconds) => updateModifier(modifier.id, { durationSeconds })}
@@ -528,10 +707,12 @@ function YoutubeLinksEditor({
   modifier,
   onChange,
   onVolumeChange,
+  onVideoLimitChange,
 }: {
   modifier: ModifierDefinition;
   onChange: (variants: NonNullable<ModifierDefinition["variants"]>) => void;
   onVolumeChange: (volume: number) => void;
+  onVideoLimitChange: (patch: Pick<ModifierDefinition, "maxActiveVideosEnabled" | "maxActiveVideos">) => void;
 }) {
   const [draft, setDraft] = useState("");
   const variants = modifier.variants || [];
@@ -599,6 +780,39 @@ function YoutubeLinksEditor({
           }}
         />
       </label>
+      {modifier.type === "video-corner" && (
+        <>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={Boolean(modifier.maxActiveVideosEnabled)}
+              onChange={(event) =>
+                onVideoLimitChange({
+                  maxActiveVideosEnabled: event.target.checked,
+                  maxActiveVideos: modifier.maxActiveVideos ?? 4,
+                })
+              }
+            />
+            Limit active videos
+          </label>
+          <label>
+            Max active videos
+            <input
+              type="number"
+              min="1"
+              max="24"
+              disabled={!modifier.maxActiveVideosEnabled}
+              value={modifier.maxActiveVideos ?? 4}
+              onChange={(event) =>
+                onVideoLimitChange({
+                  maxActiveVideosEnabled: Boolean(modifier.maxActiveVideosEnabled),
+                  maxActiveVideos: Math.max(1, Math.min(24, Number(event.target.value) || 1)),
+                })
+              }
+            />
+          </label>
+        </>
+      )}
     </details>
   );
 }

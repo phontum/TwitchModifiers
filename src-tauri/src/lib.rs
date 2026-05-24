@@ -4,6 +4,7 @@ mod donationalerts;
 mod input_listener;
 mod oauth;
 mod runtime;
+mod system_cursor;
 mod twitch;
 
 use runtime::RuntimeState;
@@ -29,6 +30,8 @@ pub fn run() {
             commands::list_monitors,
             commands::show_overlay,
             commands::hide_overlay,
+            commands::enable_system_cursor_modifier,
+            commands::restore_system_cursors,
             commands::start_runtime,
             commands::stop_runtime,
             commands::panic_stop,
@@ -44,6 +47,7 @@ pub fn run() {
             commands::remove_user_sound_file,
         ])
         .setup(|app| {
+            let _ = crate::system_cursor::restore_system_cursors();
             if let Some(overlay) = app.get_webview_window("overlay") {
                 let _ = overlay.set_ignore_cursor_events(true);
             }
@@ -55,6 +59,7 @@ pub fn run() {
                 let app = window.app_handle();
                 let state = app.state::<RuntimeState>();
                 let _ = commands::stop_runtime_inner(app, &state);
+                let _ = crate::system_cursor::restore_system_cursors();
                 if let Some(overlay) = app.get_webview_window("overlay") {
                     let _ = overlay.close();
                 }

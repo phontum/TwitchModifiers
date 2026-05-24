@@ -1,6 +1,7 @@
 use crate::config_store::{self, AppConfig};
 use crate::donationalerts;
 use crate::runtime::{emit_roll_requested, make_log, RuntimeState, TriggerEvent};
+use crate::system_cursor;
 use crate::twitch;
 use chrono::Utc;
 use serde::Serialize;
@@ -28,10 +29,51 @@ pub fn load_config(app: AppHandle) -> Result<Option<AppConfig>, String> {
 }
 
 #[tauri::command]
-pub fn save_config(app: AppHandle, config: AppConfig) -> Result<(), String> {
+pub async fn save_config(
+    app: AppHandle,
+    state: tauri::State<'_, RuntimeState>,
+    config: AppConfig,
+) -> Result<(), String> {
     config_store::save(&app, &config)?;
     app.emit("app:config-loaded", config)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    if *state.is_playing.lock().expect("runtime state poisoned") {
+        restart_twitch_listeners(&app).await?;
+    }
+
+    Ok(())
+}
+
+async fn restart_twitch_listeners(app: &AppHandle) -> Result<(), String> {
+    if let Some(config) = config_store::load(app)? {
+        let state = app.state::<RuntimeState>();
+        if let Some(handle) = state
+            .twitch_task
+            .lock()
+            .expect("twitch task poisoned")
+            .take()
+        {
+            handle.abort();
+        }
+        if let Some(handle) = state
+            .twitch_chat_task
+            .lock()
+            .expect("twitch chat task poisoned")
+            .take()
+        {
+            handle.abort();
+        }
+
+        twitch::start_listener(app.clone(), config).await?;
+        app.emit(
+            "log:append",
+            make_log("info", "Twitch listeners reloaded from saved settings"),
+        )
+        .map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -113,6 +155,46 @@ pub fn hide_overlay(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn enable_system_cursor_modifier(
+    app: AppHandle,
+    cursor_theme_id_or_path: Option<String>,
+    duration_ms: u64,
+) -> Result<(), String> {
+    let cursor_theme_id_or_path =
+        cursor_theme_id_or_path.unwrap_or_else(|| "lime-square".to_string());
+    match system_cursor::enable(&app, cursor_theme_id_or_path, duration_ms) {
+        Ok(()) => {
+            let _ = app.emit(
+                "log:append",
+                make_log("info", "System cursor modifier enabled"),
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let _ = app.emit(
+                "log:append",
+                make_log("warn", format!("System cursor modifier failed: {error}")),
+            );
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn restore_system_cursors(app: AppHandle) -> Result<(), String> {
+    match system_cursor::restore_system_cursors() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = app.emit(
+                "log:append",
+                make_log("warn", format!("System cursor restore failed: {error}")),
+            );
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn start_runtime(
     app: AppHandle,
     state: tauri::State<'_, RuntimeState>,
@@ -141,6 +223,7 @@ pub fn stop_runtime(app: AppHandle, state: tauri::State<'_, RuntimeState>) -> Re
 }
 
 pub fn stop_runtime_inner(app: &AppHandle, state: &RuntimeState) -> Result<(), String> {
+    let _ = system_cursor::restore_system_cursors();
     *state.is_playing.lock().expect("runtime state poisoned") = false;
     if let Some(handle) = state
         .twitch_task

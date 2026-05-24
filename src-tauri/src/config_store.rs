@@ -32,6 +32,8 @@ pub struct TwitchConfig {
     pub reward_id: String,
     pub reward_title: String,
     #[serde(default = "default_true")]
+    pub reward_rolls_enabled: bool,
+    #[serde(default = "default_true")]
     pub subscription_rolls_enabled: bool,
     #[serde(default = "default_subscription_min_tier")]
     pub subscription_min_tier: String,
@@ -83,12 +85,23 @@ fn default_theme() -> String {
     "dark".to_string()
 }
 
+fn default_visual_layer_order() -> Vec<String> {
+    vec![
+        "lag".to_string(),
+        "tunnel".to_string(),
+        "chat".to_string(),
+        "video-corner".to_string(),
+    ]
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OverlayConfig {
     pub monitor_index: usize,
     pub always_on_top: bool,
     pub click_through: bool,
+    #[serde(default = "default_visual_layer_order")]
+    pub visual_layer_order: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,7 +178,15 @@ pub struct ModifierDefinition {
     pub duration_seconds: u64,
     pub allow_repeat_while_active: bool,
     pub volume: Option<u8>,
+    #[serde(default)]
+    pub max_active_videos_enabled: bool,
+    #[serde(default = "default_max_active_videos")]
+    pub max_active_videos: u8,
     pub variants: Option<Vec<ModifierVariant>>,
+}
+
+fn default_max_active_videos() -> u8 {
+    4
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
